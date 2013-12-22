@@ -15,19 +15,131 @@ class Respondent extends AppModel {
 
 	protected function _findStretched($state, $query, $results = array()) {
 		if ($state === 'before') {
-			$query['contain'] = 'Rating';
+			//$query['contain'] = 'Rating';
 			return $query;
 		} else if($state === 'after'){
 			foreach($results as &$respondent){
-				$grades = Hash::extract($respondent['Rating'], '{n}.grade');
+				//$grades = Hash::extract($respondent['Rating'], '{n}.grade');
+				$grades = $respondent['Rating'];
 				$max = max($grades);
 				$min = min($grades);
 				foreach($respondent['Rating'] as &$rating){
-					$rating['grade'] = (($rating['grade']-$min)*9)/($max-$min) + 1;
+					$rating = (($rating-$min)*9)/($max-$min) + 1;
 				}
 			}
 			return $results;
 		}
+	}
+	
+	public function afterFind($results, $primary = false) {
+		if(isset($results[0]['Rating'])){
+			foreach($results as &$respondent){
+				$result = array();
+				foreach($respondent['Rating'] as $rating){
+					$result[$rating['artist_id']] = (float) $rating['grade'];
+				}
+				$respondent['Rating'] = $result;
+			}				
+		}	
+		return $results;
+		
+	}
+	
+	public function calculateNDCG($similarityFunction = "AdjustedCosine", $count = 10){
+		// Load all artists
+		$artists = Cache::read("Artists");
+		if(empty($artists)){
+			$artists = ClassRegistry::init('Artist')->query('SELECT DISTINCT Artist.id, Artist.name FROM artists as Artist RIGHT JOIN ratings ON Artist.id = ratings.artist_id ORDER BY Artist.name ASC');
+			Cache::write("Artists", $artists);
+		}
+		
+		$nDCG = 0;
+		// NUMBER OF USERS
+		$userCount = 50;
+		
+		// Load respondents, from cache when possible
+		$allRespondents = Cache::read('Respondents');
+		if(empty($respondents)){
+			$allRespondents = $this->find('all', array(
+					//'conditions'=>array('not'=>array('Respondent.id' => $user['Respondent']['id'])),
+					'contain' => 'Rating.grade > 0',
+					'limit' => $userCount));
+			Cache::write('Respondents', $allRespondents);
+		}
+		
+		//$neighbors = $respondents;
+		foreach($allRespondents as $user){
+			$ratings1 = $user['Rating'];
+			// Load user and remove random 25 ratings
+			shuffle($user['Rating']);
+			$removedRatings = array_splice($user['Rating'], -25);
+			
+			$neighbors = $allRespondents;
+			foreach($neighbors as $id=>&$respondent){
+				
+				// Remove current user from neighbor set
+				if($user['Respondent']['id'] == $respondent['Respondent']['id']) {
+					unset($neighbors[$id]);
+					continue;
+				}
+
+				$ratings2 = $respondent['Rating'];
+				$respondent['sim'] = call_user_func(array($this, 'calculate'.$similarityFunction), $ratings1, $ratings2);
+			}
+
+			// Select best $count neighbors based on 'sim'
+			usort($neighbors, array($this, "sortSimularities"));
+			$neighbors = array_splice($neighbors, 0, $count);
+			
+			$computedRatings = array();
+			
+			foreach($removedRatings as $artistid=>&$rating){
+				$computedRatings[$artistid] = $this->weightedSum($artistid, $neighbors);
+			}	
+			
+			// TOP 5 suggestions, reassigns key
+			rsort($computedRatings);
+			array_splice($computedRatings, 5);
+			// TOP 5 user ratings
+			rsort($removedRatings);
+			array_splice(($removedRatings), 5);
+			
+			$nDCG += $this->getDCG($computedRatings) / $this->getDCG($removedRatings);
+		}
+		return $nDCG;
+	}
+	
+	public function getDCG($ratings){
+		$result = (float) $ratings[0];
+		for($i = 1; $i<count($ratings); $i++) {
+			$result += (float)$ratings[$i] / (log($i + 1 ,2));
+		}
+		return $result;
+	}
+	
+	function sortSimularities($a, $b) {
+		if (abs($a["sim"] - $b["sim"]) < 0.00000001) {
+			return 0; // almost equal
+		} else if (($a["sim"] - $b["sim"]) > 0) {
+			return -1;
+		} else {
+			return 1;
+		}
+	}
+	
+	public function weightedSum($artistid, $neighbors){
+		$nominator = $denominator = 0;
+		foreach($neighbors as $neighbor){
+			//$neighbor['Rating'] = $this->formatUserRatings($neighbor['Rating']);
+			if(!empty($neighbor['Rating'][$artistid])){
+				$nominator += $neighbor['Rating'][$artistid] * $neighbor['sim'];
+				$denominator += abs($neighbor['sim']);
+			}
+		}
+		if($denominator == 0){
+			return -1;
+		}
+		return $nominator/$denominator;
 	}
 	
 	/**
@@ -37,16 +149,19 @@ class Respondent extends AppModel {
 	 * @return number
 	 */
 	
-	public function calculatePearson($user1, $user2){
-		$grades = $this->combinedRatings($user1, $user2);
-		if(empty($grades) || empty($grades[1])) return 0;
-		$avg1 = $this->avg($grades[1]);
-		$avg2 = $this->avg($grades[2]);
+	public function calculatePearson($item1, $item2){
+		// Items rated in both sets
+		$items = array_intersect(array_keys($item1), array_keys($item2));
+		
+		//$grades = $this->combinedRatings($user1, $user2);
+		if(empty($items)) return 0;
+		$avg1 = $this->avg($item1);
+		$avg2 = $this->avg($item2);
 		$sumUser1Squared = $sumUser2Squared = $sumCombined = 0.0; 
-		foreach($grades[1] as $i=>$grade){
-			$sumCombined += (($grades[1][$i] - $avg1) * ($grades[2][$i] - $avg2)); // For nominator
-			$sumUser1Squared += pow($grades[1][$i] - $avg1, 2); // For denominator
-			$sumUser2Squared += pow($grades[2][$i] - $avg2, 2);
+		foreach($items as $i){
+			$sumCombined += (($item1[$i] - $avg1) * ($item2[$i] - $avg2)); // For nominator
+			$sumUser1Squared += pow($item1[$i] - $avg1, 2); // For denominator
+			$sumUser2Squared += pow($item2[$i] - $avg2, 2);
 			
 		}
 		// Hack(?) if user has rated all items the same.
@@ -56,17 +171,16 @@ class Respondent extends AppModel {
 		return ($sumCombined) / (sqrt($sumUser1Squared * $sumUser2Squared));
 	}
 	
-	public function calculateCosineSimilarity($user1, $user2){
+	public function calculateCosine($user1, $user2){
 		//$grades = $this->combinedRatings($user1, $user2);
 		//if(empty($grades) || empty($grades[1])) return 0;
 		// Find complete set of rated items
 		$items = array_merge(array_keys($user1), array_keys($user2));
 		$sumCombined = $sumUser1 = $sumUser2 = 0.0;
-		foreach($items as $item){
+		foreach($items as $i=>$item){
 			if(!empty($user1[$item]) && !empty($user2[$item])) {
-				$sumCombined += $user1[$i] * $user2[$i];
+				$sumCombined += $user1[$item] * $user2[$item];
 			}
-			
 		}
 		foreach($user1 as $i=>$grade){
 			$sumUser1 += pow($grade, 2);
@@ -78,7 +192,7 @@ class Respondent extends AppModel {
 		return $sumCombined / (sqrt($sumUser1) * sqrt($sumUser2));
 	}	
 	
-	public function calculateAdjustedCosineSimilarity($item1, $item2){
+	public function calculateAdjustedCosine($item1, $item2){
 		// Items that are rated in both sets
 		$items = array_intersect(array_keys($item1), array_keys($item2));
 		
@@ -151,5 +265,6 @@ class Respondent extends AppModel {
 		}
 		return $result;
 	}
+
 	
 }

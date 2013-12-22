@@ -1,5 +1,6 @@
 <?php
 
+use Lib\Similarity;
 App::uses('AppController', 'Controller');
 
 class ExcelController extends AppController {
@@ -15,7 +16,49 @@ class ExcelController extends AppController {
 
 	public $artists = array();
 
-	public function suggestions() {
+	
+	public function test(){
+		App::import('Vendor', 'PHPExcel/Classes/PHPExcel');
+		
+		$objPHPExcel = new PHPExcel();
+		$objPHPExcel->setActiveSheetIndex(0);
+		$rowCount = 2;
+	
+		
+		$objPHPExcel->getActiveSheet()->SetCellValue('A1', "#Neighbors");
+		$objPHPExcel->getActiveSheet()->SetCellValue('B1', "Pearson");
+		$objPHPExcel->getActiveSheet()->SetCellValue('C1', "Cosine");
+		$objPHPExcel->getActiveSheet()->SetCellValue('D1', "AdjustedCosine");
+		
+		
+		
+		
+		for($i=1 ; $i<30; $i = $i+1){
+			$objPHPExcel->getActiveSheet()->SetCellValue('A'.$rowCount, $i);
+			//$objPHPExcel->getActiveSheet()->SetCellValue('B'.$rowCount, $this->Respondent->calculateNDCG("Pearson", $i));
+			$objPHPExcel->getActiveSheet()->SetCellValue('C'.$rowCount, $this->Respondent->calculateNDCG("Cosine", $i));
+			//$objPHPExcel->getActiveSheet()->SetCellValue('D'.$rowCount, $this->Respondent->calculateNDCG("AdjustedCosine", $i));
+				
+			$rowCount++;
+			
+		//	echo($this->Respondent->calculateNDCG("Pearson", $i));
+		//	echo "<br />";
+		}
+		
+		$objWriter = new PHPExcel_Writer_Excel2007($objPHPExcel);
+		$objWriter->save('some_excel_file.xlsx');
+		/*
+		echo "AdjustedCosine <br />";
+		for($i=5 ; $i<100; $i = $i+5){
+			echo($this->Respondent->calculateNDCG("AdjustedCosine", $i));
+			echo "<br />";
+		}
+		*/
+		die();
+	}
+	
+	
+	public function suggestions($similarityFunction = 'Pearson', $neighbors = '10') {
 		$artists = $this->Artist->query('SELECT DISTINCT Artist.id, Artist.name FROM artists as Artist RIGHT JOIN ratings ON Artist.id = ratings.artist_id ORDER BY Artist.name ASC');
 		
 		if($this->request->is('post')){

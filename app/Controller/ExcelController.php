@@ -16,6 +16,21 @@ class ExcelController extends AppController {
 
 	public $artists = array();
 
+	public function errHandle($errNo, $errStr, $errFile, $errLine) {
+		$msg = "$errStr in $errFile on line $errLine";
+		if ($errNo == E_NOTICE || $errNo == E_WARNING) {
+			throw new ErrorException($msg, $errNo);
+		} else {
+			echo $msg;
+		}
+	}
+	
+	
+	public function __construct($request = null, $response = null){
+		parent::__construct($request, $response);
+		set_error_handler(array($this, 'errHandle'));
+		
+	}
 	
 	public function test(){
 		App::import('Vendor', 'PHPExcel/Classes/PHPExcel');
@@ -29,15 +44,17 @@ class ExcelController extends AppController {
 		$objPHPExcel->getActiveSheet()->SetCellValue('B1', "Pearson");
 		$objPHPExcel->getActiveSheet()->SetCellValue('C1', "Cosine");
 		$objPHPExcel->getActiveSheet()->SetCellValue('D1', "AdjustedCosine");
+		$objPHPExcel->getActiveSheet()->SetCellValue('E1', "Xtreme");
 		
 		
 		
 		
-		for($i=1 ; $i<30; $i = $i+1){
+		for($i=1 ; $i<20; $i = $i+1){
 			$objPHPExcel->getActiveSheet()->SetCellValue('A'.$rowCount, $i);
-			//$objPHPExcel->getActiveSheet()->SetCellValue('B'.$rowCount, $this->Respondent->calculateNDCG("Pearson", $i));
+			$objPHPExcel->getActiveSheet()->SetCellValue('B'.$rowCount, $this->Respondent->calculateNDCG("Pearson", $i));
 			$objPHPExcel->getActiveSheet()->SetCellValue('C'.$rowCount, $this->Respondent->calculateNDCG("Cosine", $i));
-			//$objPHPExcel->getActiveSheet()->SetCellValue('D'.$rowCount, $this->Respondent->calculateNDCG("AdjustedCosine", $i));
+			$objPHPExcel->getActiveSheet()->SetCellValue('D'.$rowCount, $this->Respondent->calculateNDCG("AdjustedCosine", $i));
+			$objPHPExcel->getActiveSheet()->SetCellValue('E'.$rowCount, $this->Respondent->calculateNDCG("Xtreme", $i));
 				
 			$rowCount++;
 			
@@ -76,8 +93,8 @@ class ExcelController extends AppController {
 			
 			foreach($respondents as &$respondent){
 				$ratings2 = $this->formatUserRatings($respondent['Rating']);
-				//$respondent['sim'] = $this->Respondent->calculatePearson($ratings1, $ratings2);
-				$respondent['sim'] = $this->Respondent->calculateAdjustedCosineSimilarity($ratings1, $ratings2);
+				$respondent['sim'] = call_user_func(array('this', '$this->Respondent->calculate'.$similarityFunction), $ratings1, $ratings2);
+				//$respondent['sim'] = $this->Respondent->calculateAdjustedCosineSimilarity($ratings1, $ratings2);
 			}
 	
 			usort($respondents, array($this, "sortSimularities"));

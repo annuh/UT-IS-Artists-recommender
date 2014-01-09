@@ -45,7 +45,9 @@ class Respondent extends AppModel {
 		
 	}
 	
-	public function calculateNDCG($similarityFunction = "AdjustedCosine", $count = 10){
+	
+	
+	public function calculateNDCG($similarityFunction = "AdjustedCosine", $top_neighbors = 10){
 		// Load all artists
 		$artists = Cache::read("Artists");
 		if(empty($artists)){
@@ -55,26 +57,26 @@ class Respondent extends AppModel {
 		
 		$nDCG = 0;
 		// NUMBER OF USERS
-		$userCount = 50;
+		$userCount = 20;
 		
 		// Load respondents, from cache when possible
-		$allRespondents = Cache::read('Respondents');
-		if(empty($respondents)){
-			$allRespondents = $this->find('all', array(
+		$training_set = Cache::read('Respondents');
+		if(empty($training_set)){
+			$training_set = $this->find('all', array(
 					//'conditions'=>array('not'=>array('Respondent.id' => $user['Respondent']['id'])),
 					'contain' => 'Rating.grade > 0',
 					'limit' => $userCount));
-			Cache::write('Respondents', $allRespondents);
+			Cache::write('Respondents', $training_set);
 		}
 		
-		//$neighbors = $respondents;
-		foreach($allRespondents as $user){
+		foreach($training_set as $user){
 			$ratings1 = $user['Rating'];
 			// Load user and remove random 25 ratings
-			shuffle($user['Rating']);
-			$removedRatings = array_splice($user['Rating'], -25);
+			$user['Rating'] = $this->shuffle_assoc($user['Rating']);
+			$removedRatings = array_slice($user['Rating'], -25, null, true);
 			
-			$neighbors = $allRespondents;
+			// Set of neigbors for current user (current user will be removed later from this array)
+			$neighbors = $training_set;
 			foreach($neighbors as $id=>&$respondent){
 				
 				// Remove current user from neighbor set
@@ -82,39 +84,108 @@ class Respondent extends AppModel {
 					unset($neighbors[$id]);
 					continue;
 				}
-
+				
 				$ratings2 = $respondent['Rating'];
 				$respondent['sim'] = call_user_func(array($this, 'calculate'.$similarityFunction), $ratings1, $ratings2);
+				
 			}
 
 			// Select best $count neighbors based on 'sim'
 			usort($neighbors, array($this, "sortSimularities"));
-			$neighbors = array_splice($neighbors, 0, $count);
 			
+			$neighbors = array_splice($neighbors, 0, $top_neighbors);
+			
+			
+			
+			// Guess users grade for the removedRatings
 			$computedRatings = array();
-			
-			foreach($removedRatings as $artistid=>&$rating){
+			foreach($removedRatings as $artistid=>$rating){
 				$computedRatings[$artistid] = $this->weightedSum($artistid, $neighbors);
-			}	
+			}
 			
-			// TOP 5 suggestions, reassigns key
-			rsort($computedRatings);
-			array_splice($computedRatings, 5);
+			
+			
+			$computedTopArtists = $computedRatings;
+			arsort($computedTopArtists);
+			array_slice($computedTopArtists, 5);
+			$computedTopArtists = array_keys($computedTopArtists);
+			
+// 			// TOP 5 suggestions, reassigns key
+// 			$computedTopArtists = array_flip($computedRatings); // {[grade] => [artist_id]}
+// 			// Sort on ratings
+// 			krsort($computedTopArtists);
+// 			// Resets keys, so [0] => 'Highest rated artist'
+// 			array_values($computedTopArtists);
+// 			// Take 5 best artists
+// 			array_splice($computedTopArtists, 5);
+			
+			
+			
 			// TOP 5 user ratings
-			rsort($removedRatings);
-			array_splice(($removedRatings), 5);
+			//rsort($removedRatings);
+			//array_splice(($removedRatings), 5);
 			
-			$nDCG += $this->getDCG($computedRatings) / $this->getDCG($removedRatings);
+			$dcg = $this->getDCG($computedTopArtists, $ratings1);
+			$idcg = $this->getIDCG($removedRatings);
+			
+			$nDCG += ($dcg / $idcg);
+			
+			//die(debug($nDCG));
+			
 		}
-		return $nDCG;
+		
+		return $nDCG / $userCount;
 	}
 	
-	public function getDCG($ratings){
-		$result = (float) $ratings[0];
-		for($i = 1; $i<count($ratings); $i++) {
-			$result += (float)$ratings[$i] / (log($i + 1 ,2));
+	function shuffle_assoc($list) {
+		if (!is_array($list)) return $list;
+	
+		$keys = array_keys($list);
+		shuffle($keys);
+		$random = array();
+		foreach ($keys as $key) {
+			$random[$key] = $list[$key];
+		}
+		return $random;
+	}
+	
+	function array_splice_assoc(&$input, $offset, $length=0, $replacement) {
+		$replacement = (array) $replacement;
+		$key_indices = array_flip(array_keys($input));
+		if (isset($input[$offset]) && is_string($offset)) {
+			$offset = $key_indices[$offset];
+		}
+		if (isset($input[$length]) && is_string($length)) {
+			$length = $key_indices[$length] - $offset;
+		}
+	
+		$input = array_slice($input, 0, $offset, TRUE)
+		+ $replacement
+		+ array_slice($input, $offset + $length, NULL, TRUE);
+	}
+	
+	/**
+	 * Computes DCG
+	 * @param array $computedTopArtists - sorted list of artist_id [0] => 'Best artist_id', [1] => '2nd best artist_id', etc..
+	 * @param array $removedRatings Original ratings - [artist_id] => rating
+	 * @return number
+	 */
+	public function getDCG($computedTopArtists, $removedRatings = array()){
+		
+		$result = (float) $removedRatings[$computedTopArtists[0]];
+		for($i = 1; $i<count($computedTopArtists); $i++) {
+			$result += (float)$removedRatings[$computedTopArtists[$i]] / (log($i + 1 ,2));
 		}
 		return $result;
+	}
+	
+	public function getIDCG($ratings, $at = 5){
+		$computedTopArtists = $ratings;
+		arsort($computedTopArtists);
+		array_slice($computedTopArtists, 5);
+		$computedTopArtists = array_keys($computedTopArtists);
+		return $this->getDCG($computedTopArtists, $ratings);
+		
 	}
 	
 	function sortSimularities($a, $b) {
@@ -127,19 +198,69 @@ class Respondent extends AppModel {
 		}
 	}
 	
+	/**
+	 * Returns suggestion
+	 * @param unknown $artistid
+	 * @param unknown $neighbors
+	 * @return number
+	 */
 	public function weightedSum($artistid, $neighbors){
 		$nominator = $denominator = 0;
 		foreach($neighbors as $neighbor){
 			//$neighbor['Rating'] = $this->formatUserRatings($neighbor['Rating']);
 			if(!empty($neighbor['Rating'][$artistid])){
-				$nominator += $neighbor['Rating'][$artistid] * $neighbor['sim'];
+				$nominator += ($neighbor['Rating'][$artistid] * $neighbor['sim']);
 				$denominator += abs($neighbor['sim']);
 			}
 		}
+		
 		if($denominator == 0){
 			return -1;
 		}
-		return $nominator/$denominator;
+	
+		return (int) $nominator/$denominator;
+	}
+	
+	public function filter($x, $items = array()){
+		$result = array();
+		foreach($items as $key=>$value){
+			if($x === $value){
+				$result[$key] = $value;
+			}
+		}
+		return $result;
+	}
+	
+	public function calculateXtreme($item1, $item2){
+		
+		$max = max($item1);
+		$min = min($item1);
+		
+		$max_items = $this->filter($max, $item1);
+		$min_items = $this->filter($min, $item1);
+		
+		$artists_max = array_intersect(array_keys($max_items), array_keys($item2));
+		$artists_min = array_intersect(array_keys($min_items), array_keys($item2));
+		
+		//$artists = array_intersect($artists_max, $artists_min);
+		$common_artists_count = (count($artists_max) + count($artists_min) == 0);
+		if($common_artists_count == 0) return 0;
+		
+		$difference = 0;
+		foreach($max_items as $artist=>$rating){
+			if(isset($item2[$artist]) && $item2[$artist] < $rating){
+				$difference += $rating-$item2[$artist];
+			}
+		}
+		
+		foreach($min_items as $artist=>$rating){
+			if(isset($item2[$artist]) && $item2[$artist] > $rating){
+				$difference += $item2[$artist]-$rating;
+			}
+		}
+		
+		return 1- (($difference /$common_artists_count) / 9);
+		
 	}
 	
 	/**

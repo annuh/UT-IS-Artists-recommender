@@ -32,6 +32,22 @@ class RespondentTest extends CakeTestCase {
 		$result = $this->Respondent->calculatePearson($ratings1, $ratings2);
 		$this->assertEquals(4/((sqrt(8)*sqrt(4))), $result);
 	}
+	
+	public function testDCG(){
+		$ratings = array(1=>3, 2=>2, 3=>3, 4=>0, 5=>1, 6=>2);
+		$computed = array(0=>1, 1=>2, 2=>3, 3=>4, 4=>5, 5=>6);
+		$expected = 8.1;
+		$result = round($this->Respondent->getDCG($computed, $ratings), 1);
+		$this->assertEquals($expected, $result);
+	}
+	public function testIDCG(){
+		$ratings = array(1=>3, 2=>2, 3=>3, 4=>0, 5=>1, 6=>2);
+		$expected = 8.69;
+		$result = round($this->Respondent->getIDCG($ratings, 6), 2);
+		$this->assertEquals($expected, $result);
+	}
+	
+	
 }
 
 ?>

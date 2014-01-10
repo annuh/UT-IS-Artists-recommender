@@ -40,11 +40,26 @@ class RespondentTest extends CakeTestCase {
 		$result = round($this->Respondent->getDCG($computed, $ratings), 1);
 		$this->assertEquals($expected, $result);
 	}
-	public function testIDCG(){
-		$ratings = array(1=>3, 2=>2, 3=>3, 4=>0, 5=>1, 6=>2);
-		$expected = 8.69;
-		$result = round($this->Respondent->getIDCG($ratings, 6), 2);
-		$this->assertEquals($expected, $result);
+	
+	public function testXtreme(){
+		$rating1 = array(1=>9, 2=>9, 3=>4);
+		$rating2 = array(1=>6, 2=>7, 3=>2);
+		
+		$expected = 1 - ((5/3)/9);
+		$result = $this->Respondent->calculateXtreme($rating1, $rating2);
+		
+		$this->assertEquals($result, $expected);
+		
+	}
+
+	public function testNDCG(){
+		$ratings1 = array(1=>3, 2=>2, 3=>3, 4=>0, 5=>1, 6=>2);
+		$computedRatings = array(1=>10, 2=>9, 3=>8, 4=>7, 5=>6, 6=>5);
+		
+		$expected = 0.932;
+		$result = round($this->Respondent->getNDCG($computedRatings, $ratings1), 2);
+		
+		
 	}
 	
 	

@@ -32,6 +32,18 @@ class ExcelController extends AppController {
 		
 	}
 	
+	public function bla(){
+		$rating1 = array(1=>9, 2=>9, 3=>4);
+		$rating2 = array(1=>6, 2=>7, 3=>2);
+		$result = $this->Respondent->test();
+		die(debug($result));
+	}
+	
+	public function baseline(){
+		$this->Respondent->calculateBaseLine();
+		
+	}
+	
 	public function test(){
 		App::import('Vendor', 'PHPExcel/Classes/PHPExcel');
 		
@@ -48,12 +60,11 @@ class ExcelController extends AppController {
 		
 		
 		
-		
 		for($i=1 ; $i<20; $i = $i+1){
 			$objPHPExcel->getActiveSheet()->SetCellValue('A'.$rowCount, $i);
 			$objPHPExcel->getActiveSheet()->SetCellValue('B'.$rowCount, $this->Respondent->calculateNDCG("Pearson", $i));
-			$objPHPExcel->getActiveSheet()->SetCellValue('C'.$rowCount, $this->Respondent->calculateNDCG("Cosine", $i));
-			$objPHPExcel->getActiveSheet()->SetCellValue('D'.$rowCount, $this->Respondent->calculateNDCG("AdjustedCosine", $i));
+ 			$objPHPExcel->getActiveSheet()->SetCellValue('C'.$rowCount, $this->Respondent->calculateNDCG("Cosine", $i));
+ 			$objPHPExcel->getActiveSheet()->SetCellValue('D'.$rowCount, $this->Respondent->calculateNDCG("AdjustedCosine", $i));
 			$objPHPExcel->getActiveSheet()->SetCellValue('E'.$rowCount, $this->Respondent->calculateNDCG("Xtreme", $i));
 				
 			$rowCount++;

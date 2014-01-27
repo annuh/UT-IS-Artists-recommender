@@ -25,22 +25,72 @@ class ExcelController extends AppController {
 		}
 	}
 	
-	
 	public function __construct($request = null, $response = null){
 		parent::__construct($request, $response);
 		set_error_handler(array($this, 'errHandle'));
 		
 	}
+
+	public function demo(){
+		//$artists = $this->Artist->query('SELECT DISTINCT Artist.id, Artist.name FROM artists as Artist RIGHT JOIN ratings ON Artist.id = ratings.artist_id ORDER BY Artist.name ASC');
+		$artists = Cache::read("Artists");
+		if(empty($artists)){
+			$artists = ClassRegistry::init('Artist')->query('SELECT DISTINCT Artist.id, Artist.name FROM artists as Artist RIGHT JOIN ratings ON Artist.id = ratings.artist_id ORDER BY Artist.name ASC');
+			Cache::write("Artists", $artists);
+		}
+		
+		if($this->request->is('post')){
+			debug($this->request->data['Rating']);
+			$ratings1= array();
+			$ratings = $this->request->data['Rating'];
+			foreach($ratings as $rating){
+				$ratings1[$rating['artist_id']] = (float) $rating['grade'];
+			}
+		//	(debug($ratings1));
+			//$respondents = $this->Respondent->find('all', array('contain' => 'Rating.grade > 0'));
+			$respondents = Cache::read('Respondents');
+			if(empty($respondents)){
+				$respondents = $this->Respondent->find('all', array(
+						'contain' => 'Rating.grade > 0'));
+				Cache::write('Respondents', $respondents);
+			}
+			//die(debug($respondents));
+
+			foreach($respondents as &$respondent){
+				$ratings2 = $respondent['Rating'];
+				//debug($ratings1);debug($ratings2);die();
+				$respondent['sim'] = $this->Respondent->calculateXtreme($ratings1, $ratings2);
+				//$respondent['sim'] = $this->Respondent->calculateAdjustedCosineSimilarity($ratings1, $ratings2);
+			}
+			
+			usort($respondents, array($this->Respondent, "sortSimularities"));
 	
-	public function bla(){
-		$rating1 = array(1=>9, 2=>9, 3=>4);
-		$rating2 = array(1=>6, 2=>7, 3=>2);
-		$result = $this->Respondent->test();
-		die(debug($result));
+			$respondents = array_splice($respondents, 0, 10);	
+			foreach($artists as &$artist){
+				if(!array_key_exists($artist['Artist']['id'], $ratings1)){
+					$artist['sim'] = $this->Respondent->suggestionsAvg($artist['Artist']['id'], $respondents);
+				} else {
+					$artist['sim'] = -1;
+				}
+			}
+			usort($artists, array($this->Respondent, "sortSimularities"));
+		
+			die(debug($artists));
+			
+				
+		} else {
+				
+			$this->set(compact('artists'));
+		}
+		
+		
+		
 	}
 	
 	public function baseline(){
-		$this->Respondent->calculateBaseLine();
+		
+		
+		die(debug($this->Respondent->calculateBaseLine()));
 		
 	}
 	
@@ -57,8 +107,6 @@ class ExcelController extends AppController {
 		$objPHPExcel->getActiveSheet()->SetCellValue('C1', "Cosine");
 		$objPHPExcel->getActiveSheet()->SetCellValue('D1', "AdjustedCosine");
 		$objPHPExcel->getActiveSheet()->SetCellValue('E1', "Xtreme");
-		
-		
 		
 		for($i=1 ; $i<20; $i = $i+1){
 			$objPHPExcel->getActiveSheet()->SetCellValue('A'.$rowCount, $i);

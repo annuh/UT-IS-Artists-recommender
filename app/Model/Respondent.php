@@ -49,7 +49,7 @@ class Respondent extends AppModel {
 	
 	public function calculateBaseLine(){
 		$respondents = $this->find('all', array(
-				'conditions'=>array('respondent_id <' =>100),
+				'conditions'=>array('id <=' =>100),
 				'contain' => 'Rating.grade > 0',
 		));
 		
@@ -57,41 +57,42 @@ class Respondent extends AppModel {
 				'sum' => 'SUM(Rating.grade)',
 				'count' => 'COUNT(*)');
 		$ratings_sum = $this->Rating->find('list', array(
-				'conditions' => array('Rating.grade >' => 0, 'respondent_id <' => 100),
+				'conditions' => array('Rating.grade >' => 0, 'respondent_id <=' => 100),
 				'fields'=>array('count', 'sum','Rating.artist_id', ), 'group'=>array('Rating.artist_id'), 'order'=>'sum'));
 		
-		$nDCG = 0;
+		$nDCG = array();
 		
 		foreach($respondents as $user){
 			$ratings1 = $user['Rating'];
-			
-			$neighbors = $respondents;
-			$neighborRatings = $computedRatings = array();
-			foreach($neighbors as $id=>&$respondent){
-				// Remove current user from neighbor set
-				if($user['Respondent']['id'] == $respondent['Respondent']['id']) {
-					unset($neighbors[$id]);
-					continue;
-				}	
-			}
-			$neighbors = $this->shuffle_assoc($respondents);
-			$neighbors = array_slice($neighbors, 0, 100, true);
-
-			foreach($ratings1 as $artist_id=>$userRating){
-				$voteCount = (float)key($ratings_sum[$artist_id]);
-				$voteSum = (float)array_values($ratings_sum[$artist_id])[0];
+			$user['Rating'] = $this->shuffle_assoc($user['Rating']);
 				
-				if($user['Respondent']['id'] < 100){
+			if(count($user['Rating']) < 25){
+				continue;
+			}
+			
+			$removedRatings = array_slice($user['Rating'], 0, 25, true);
+			$computedRatings = array();
+			foreach($removedRatings as $artist_id=>$userRating){
+				$voteCount = $this->Rating->field('count', array('artist_id'=>$artist_id, 'respondent_id <='=>10));
+				$voteSum = $this->Rating->field('sum', array('artist_id'=>$artist_id, 'respondent_id <='=>100));
+				
+				
+// 				$voteCount = (float)key($ratings_sum[$artist_id]);
+// 				$voteSum = (float)array_values($ratings_sum[$artist_id])[0];
+// 				debug($voteCount);
+// 				debug($voteSum);
+// 				debug($artist_id);die();
+				//if($user['Respondent']['id'] < 100){
 					$voteSum = $voteSum - $userRating;
 					$voteCount = $voteCount - 1;
-				}
+				//}
 				$computedRatings[$artist_id] = ($voteSum) /  ($voteCount);
 			}
-			
-			$nDCG += $this->getNDCG($computedRatings, $ratings1);			
+		
+			$nDCG[] = $this->getNDCG($computedRatings, $ratings1);
 		}
-		die(debug($nDCG/count($respondents)));
-		return $nDCG / count($respondents);
+		//die(debug($nDCG/count($respondents)));
+		return array_sum($nDCG) / count($nDCG);
 	}
 	
 	public function calculateNDCG($similarityFunction = "AdjustedCosine", $top_neighbors = 10, $suggestionsFunction = "avg", $extra_options = array()){
@@ -102,14 +103,14 @@ class Respondent extends AppModel {
 			Cache::write("Artists", $artists);
 		}
 		
-		$nDCG = 0;
+		$nDCG= array();
 		// NUMBER OF USERS
 		$userCount = 100;
 		
 		// Load respondents, from cache when possible
 		$training_set = Cache::read('Respondents'.$userCount);
 		if(empty($training_set)){
-			$training_set = $this->find('all', array(
+			$training_set = $this->find('stretched', array(
 					'contain' => 'Rating.grade > 0',
 					'limit' => $userCount));
 			Cache::write('Respondents'.$userCount, $training_set);
@@ -125,8 +126,7 @@ class Respondent extends AppModel {
 			}
 			
 			$removedRatings = array_slice($user['Rating'], 0, 25, true);
-			$ratingsWithoutRemovedRatings = array_slice($user['Rating'], 26);
-			
+			$ratingsWithoutRemovedRatings = array_slice($user['Rating'], 25, null, true);
 			// Set of neigbors for current user (current user will be removed later from this array)
 			$neighbors = $training_set;
 			foreach($neighbors as $id=>&$respondent){
@@ -138,23 +138,45 @@ class Respondent extends AppModel {
 				}
 				
 				$ratings2 = $respondent['Rating'];
-				$respondent['sim'] = call_user_func(array($this, 'calculate'.$similarityFunction),$removedRatings, $ratings2, $extra_options);
+				//$respondent['sim'] = call_user_func(array($this, 'calculate'.$similarityFunction),$removedRatings, $ratings2, $extra_options);
+				$respondent['sim'] = call_user_func(array($this, 'calculate'.$similarityFunction),$ratingsWithoutRemovedRatings, $ratings2, $extra_options);
 			}
 
 			// Select best $top_neighbors neighbors based on 'sim'
 			usort($neighbors, array($this, "sortSimularities"));
+		
+				
 			$neighbors = array_slice($neighbors, 0, $top_neighbors);
 			
+		
 			// Guess users grade for the removedRatings
 			$computedRatings = array();
 			foreach($removedRatings as $artistid=>$rating){
 				$computedRatings[$artistid] = call_user_func(array($this, 'suggestions'.$suggestionsFunction),$artistid, $neighbors);
 				//$computedRatings[$artistid] = $this->weightedSumSuggestions($artistid, $neighbors);
 			}
+
+// 			$original_ratings = $this->find('all', array(
+// 				'conditions'=>array(
+// 					'id'=>$user['Respondent']['id'])
+// 				,'contain' => array('Rating' => array('artist_id' => array_keys($removedRatings))));
+// 			$removedRatings = $original_ratings['Rating'];
 			
-			$nDCG += $this->getNDCG($computedRatings, $removedRatings);			
+			
+			$nDCG[] = $this->getNDCG($computedRatings, $removedRatings);			
 		}
-		return $nDCG / $userCount;
+		return array_sum($nDCG)/ count($nDCG);
+		//return $this->sd($nDCG);
+		//return min($nDCG);
+	}
+	
+	// Function to calculate square of value - mean
+	function sd_square($x, $mean) { return pow($x - $mean,2); }
+	
+	// Function to calculate standard deviation (uses sd_square)    
+	function sd($array) {
+	    // square root of sum of squares devided by N-1
+	    return sqrt(array_sum(array_map(array($this, "sd_square"), $array, array_fill(0,count($array), (array_sum($array) / count($array)) ) ) ) / (count($array)-1) );
 	}
 	
 	function shuffle_assoc($list) {
@@ -180,6 +202,13 @@ class Respondent extends AppModel {
 		for($i = 1; $i<count($computedTopArtists); $i++) {
 			$result += (float)$removedRatings[$computedTopArtists[$i]] / (log($i + 1 ,2));
 		}
+// 		
+// 		Extreme DCG
+// 		$result = 0.0;
+// 		for($i = 0; $i<count($computedTopArtists); $i++){
+// 			$result += (pow(2,$removedRatings[$computedTopArtists[$i]]) - 1) / (log($i + 2, 2));
+// 		}
+		
 		return $result;
 	}
 
@@ -190,12 +219,29 @@ class Respondent extends AppModel {
 	 * @return number
 	 */
 	public function getNDCG($computedRatings, $originalRatings, $at=5){
+		
+		
+		
 		$computedTopArtists = $this->getBestItems($computedRatings, $at);
 		$dcg = $this->getDCG($computedTopArtists, $originalRatings);
 		
 		$originalTopItems = $this->getBestItems($originalRatings, $at);
 		$idcg = $this->getDCG($originalTopItems, $originalRatings);
 		
+// 		$mae = 0.0;
+// 		foreach($originalTopItems as $rank=>$topArtist){
+// 			$mae += abs($computedRatings[$topArtist] - $originalRatings[$topArtist]);
+// 			debug($mae);
+// 		}
+// 		debug($mae);die();
+		
+		
+		
+// 		debug($originalRatings);
+// 		debug($originalTopItems);
+// // 		debug($dcg);
+// // 		debug($idcg);
+// // 		die();
 		return $dcg / $idcg;
 	}
 	
@@ -242,7 +288,7 @@ class Respondent extends AppModel {
 		}
 		
 		if($denominator == 0){
-			return -1;
+			return 0;
 		}
 		
 		return $nominator/$denominator;
@@ -264,7 +310,7 @@ class Respondent extends AppModel {
 		}
 		
 		if($denominator == 0){
-			return -1;
+			return 0;
 		}
 	
 		return $nominator/$denominator;
@@ -344,7 +390,7 @@ class Respondent extends AppModel {
 			$sumUser2Squared += pow($item2[$i] - $avg2, 2);
 			
 		}
-		// Hack(?) if user has rated all items the same.
+// 		Hack(?) if user has rated all items the same.
 		if($sumUser1Squared == 0) $sumUser1Squared = 0.1;
 		if($sumUser2Squared == 0) $sumUser2Squared = 0.1;
 		
@@ -397,10 +443,10 @@ class Respondent extends AppModel {
 			$sumItem2Squared += pow($grade - $avg2, 2);
 		}
 		// Hack(?) if user has rated all items the same.
-	//	if($sumItem1Squared == 0) $sumItem1Squared = 0.1;
-	//	if($sumItem2Squared == 0) $sumItem2Squared = 0.1;
+		if($sumItem1Squared == 0) $sumItem1Squared = 0.1;
+		if($sumItem2Squared == 0) $sumItem2Squared = 0.1;
 		
-		return ($sumCombined) / (sqrt($sumItem1Squared * $sumItem2Squared));	
+		return ($sumCombined) / (sqrt($sumItem1Squared) * sqrt($sumItem2Squared));	
 	}
 	
 	/**
